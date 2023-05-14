@@ -1,0 +1,439 @@
+---
+title: "Risk Analytics"
+author: "Joshua"
+date: "2023-05-03"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Credit Risk Classification Dataset
+
+**Context**
+This is Customer Transaction and Demographic related data , It holds Risky and Not Risky customer for specific banking products
+
+
+**Acknowledgements**
+Thanks to Google Datasets search
+
+**Inspiration**
+Your data will be in front of the world's largest data science community. What questions do you want to see answered?
+
+This dataset help to find out weather customer is Credit Risky or Credit Worthy in Banking perspective
+
+Q1 - What are the factors contributing to Credit Risky customer?
+Q2 - Behavior of Credit Worthy Customer?
+
+**Data location**
+https://www.kaggle.com/datasets/praveengovi/credit-risk-classification-dataset?select=payment_data.csv
+
+## Loading libraries
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(ggcorrplot)
+library(caret)
+library(randomForest)
+library(reshape2)
+library(ROSE)
+library(gridExtra)
+library(DALEX)
+library(randomForestExplainer)
+```
+
+## Loading the data
+
+```{r}
+customer_data <- read_csv("~/Datasets/Personal Project - Risk Analyst/customer_data.csv")
+```
+
+```{r}
+payment_data <- read_csv("~/Datasets/Personal Project - Risk Analyst/payment_data.csv")
+```
+
+
+
+## Preliminary look at customer_data
+
+```{r}
+head(customer_data)
+```
+
+```{r}
+summary(customer_data)
+```
+Column names like fea_1, fea_2, fea_3, etc are encoded demographics.Their meaning are unknown to me. 
+
+
+## Preliminary look at payment_data
+
+```{r}
+head(payment_data)
+```
+
+```{r}
+summary(payment_data)
+```
+I see null values and also the date columns are the wrong data type. 
+
+## Cleaning the data
+
+
+Reimporting the data to reclassify with proper data types
+```{r}
+payment_data <- read.csv("~/Datasets/Personal Project - Risk Analyst/payment_data.csv" , 
+                         stringsAsFactors = FALSE, 
+                         colClasses = c("numeric", "numeric", "numeric", "numeric", "numeric", "numeric", 
+                                        "character", "numeric", "character", "numeric", "numeric", "character"),
+                         col.names = c("id", "OVD_t1", "OVD_t2", "OVD_t3", "OVD_sum", "pay_normal", 
+                                       "prod_code", "prod_limit", "update_date", "new_balance", "highest_balance", "report_date"))
+payment_data$update_date <- as.Date(payment_data$update_date, "%d/%m/%Y")
+payment_data$report_date <- as.Date(payment_data$report_date, "%d/%m/%Y")
+
+```
+
+
+Renaming the label column to "credit_risk" for clarity, and credit_risk values 0 and 1 to low and high respectively.
+```{r}
+customer_data <- customer_data %>%
+  rename(credit_risk = label) %>%
+  mutate(credit_risk = ifelse(credit_risk == 1, "high", "low"))
+```
+
+
+
+Checking for duplicates
+```{r}
+customer_data %>%
+  duplicated() %>%
+  any()
+```
+
+```{r}
+payment_data %>%
+  duplicated() %>%
+  any()
+```
+Removing duplicate rows from payment_data
+
+```{r}
+payment_data <- payment_data %>% distinct()
+
+```
+
+Confirming no duplicates
+```{r}
+payment_data %>%
+  duplicated() %>%
+  any()
+```
+
+
+Checking for null values in payment_data
+```{r}
+payment_data %>%
+  summarise_all(~ sum(is.na(.)))
+```
+```{r}
+customer_data %>%
+  summarise_all(~ sum(is.na(.)))
+```
+
+
+I want to show each column and the impact of the null values on those columns. 
+```{r}
+data_profile <- function(df) {
+  stats <- data.frame()
+  for (col in names(df)) {
+    n_missing <- sum(is.na(df[[col]]))
+    if(n_missing == 0){
+      missing_percent <- NA
+    } else {
+      missing_percent <- n_missing * 100 / nrow(df)
+    }
+    stats_row <- data.frame(Feature = col,
+                            Unique_values = n_distinct(df[[col]]),
+                            `Percentage of missing values` = missing_percent,
+                            `Percentage of values in the biggest category` = max(table(df[[col]], useNA = "ifany")) * 100 / sum(!is.na(df[[col]])))
+    stats <- rbind(stats, stats_row)
+  }
+print(stats)
+}
+
+```
+
+```{r}
+customer_stats <- data_profile(customer_data)
+
+```
+```{r}
+payment_stats <- data_profile(payment_data)
+
+```
+
+Since customer data has so few nulls, I will just replace all the null values it the column average on fea_2. 
+```{r}
+customer_data$fea_2[is.na(customer_data$fea_2)] <- mean(customer_data$fea_2, na.rm = TRUE)
+```
+
+
+
+## Explore the Data
+
+
+
+```{r}
+customer_data %>%
+  count(credit_risk)
+```
+
+```{r}
+# Generate sample data
+customer_data %>%
+  count(credit_risk) %>%
+  mutate(percent = n / sum(n)) %>%
+  ggplot(aes(x = "", y = n, fill = credit_risk)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar(theta = "y") +
+  geom_text(aes(label = paste0(round(percent * 100), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Credit Risk Breakdown", fill = "Credit Risk") +
+  theme_void()
+
+```
+
+A correlation matrix is a table that shows the correlation coefficients between different variables. It is useful in understanding the relationships between variables and identifying patterns in data.Each relationship ranges from -1 (perfect negative correlation) to +1 (perfect positive correlation), with 0 indicating no correlation.
+```{r}
+cust_data_subset <- customer_data[, c("fea_1", "fea_2", "fea_3", "fea_4", "fea_5", "fea_6", "fea_7", "fea_8", "fea_9", "fea_10", "fea_11")]
+cust_data_subset_corr <- cor(cust_data_subset)
+
+cust_data_subset_melted <- melt(cust_data_subset_corr)
+
+ggplot(cust_data_subset_melted, aes(Var2, Var1)) +
+  geom_tile(aes(fill = value), colour = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Pearson\nCorrelation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 8, hjust = 1)) +
+  coord_fixed() +
+  geom_text(aes(Var2, Var1, label = round(value,2)), color = "black", size = 3.5) +
+  labs(title = "Correlation Heatmap for Selected Features")
+```
+The average balance for customers with high and low credit risk
+```{r}
+cust_bal_avg <- aggregate(new_balance ~ id, payment_data, mean)
+cust_pymt_df <- merge(customer_data, cust_bal_avg, by = "id")
+high_risk_mean_balance <- mean(cust_pymt_df$new_balance[cust_pymt_df$credit_risk == "high"])
+low_risk_mean_balance <- mean(cust_pymt_df$new_balance[cust_pymt_df$credit_risk == "low"])
+cat("Mean balance for high risk customers: $", format(high_risk_mean_balance, big.mark = ","), " USD\n", sep = "")
+cat("Mean balance for low risk customers: $", format(low_risk_mean_balance, big.mark = ","), " USD\n", sep = "")
+mean_balances <- data.frame(
+  Risk = c("High", "Low"),
+  Balance = c(high_risk_mean_balance, low_risk_mean_balance)
+)
+ggplot(mean_balances, aes(x = Risk, y = Balance)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  ggtitle("Mean Balance for High-risk and Low-risk Customers") +
+  xlab("Credit Risk") +
+  ylab("Mean Balance (USD)") +
+  scale_y_continuous(labels = scales::dollar_format()) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+Calculate the mean for each demographic variable to check for correlation to high or low credit risk. 
+```{r}
+high_risk_customers <- customer_data[customer_data$credit_risk == "high", ]
+low_risk_customers <- customer_data[customer_data$credit_risk == "low", ]
+high_risk_means <- aggregate(high_risk_customers[, c("fea_1", "fea_2", "fea_3", "fea_4", "fea_5", "fea_6", "fea_7", "fea_8", "fea_9", "fea_10", "fea_11")], 
+                             by = list(high_risk_customers$credit_risk), FUN = mean)
+low_risk_means <- aggregate(low_risk_customers[, c("fea_1", "fea_2", "fea_3", "fea_4", "fea_5", "fea_6", "fea_7", "fea_8", "fea_9", "fea_10", "fea_11")], 
+                            by = list(low_risk_customers$credit_risk), FUN = mean)
+generate_charts <- function(high_risk_customers, low_risk_customers, high_risk_means, low_risk_means) {
+  # Combine the data
+  data <- rbind(high_risk_customers, low_risk_customers)
+  
+  # Convert data to long format
+  data_long <- data %>% 
+    pivot_longer(cols = c("fea_1", "fea_2", "fea_3", "fea_4", "fea_5", "fea_6", "fea_7", "fea_8", "fea_9", "fea_10", "fea_11"), 
+                 names_to = "feature", values_to = "value")
+  
+  # Plot the data
+  bp <- ggplot(data_long, aes(x = credit_risk, y = value, fill = credit_risk)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    facet_wrap(~feature, scales = "free_y", nrow = 3) +
+    ggtitle("Features by Credit Risk") +
+    ylab("Feature value") +
+    xlab("Credit Risk")
+  
+  # Show the plot
+  print(bp)
+}
+
+
+# Call the function with the relevant variables
+generate_charts(high_risk_customers, low_risk_customers, high_risk_means, low_risk_means)
+
+```
+
+
+
+Fea_4 is the only demographic that shows a noticeable difference between the high risk and low risk customers. 
+
+Train a random forest model with the hyperperameters
+```{r}
+# Merge data and remove missing values
+merged_data <- merge(customer_data, payment_data[, !(colnames(payment_data) %in% "prod_limit")], by = "id")
+merged_data <- na.omit(merged_data)
+merged_data$credit_risk <- factor(ifelse(merged_data$credit_risk == "low", "low", "high"), levels = c("low", "high"))
+merged_data <- subset(merged_data, select = -prod_code)
+
+
+# Undersample
+merged_data_balanced <- downSample(x = merged_data, y = merged_data$credit_risk)
+
+# Split data into training and testing sets
+set.seed(123)
+train_index <- createDataPartition(y = merged_data_balanced$credit_risk, p = 0.7, list = FALSE)
+train_data_balanced <- merged_data_balanced[train_index,]
+train_data_balanced$credit_risk <- as.factor(train_data_balanced$credit_risk)
+test_data_balanced <- merged_data_balanced[-train_index,]
+
+# Define hyperparameter tuning grid and control parameters
+rf_params <- expand.grid(mtry = seq(2, ncol(train_data_balanced)-1, by = 1))
+ntree_vals <- seq(50, 200, by = 50)
+mtry_values <- c(2, 4, 6, 8)
+tune_grid <- expand.grid(mtry = c(2, 3, 4, 5))
+ctrl <- trainControl(method = "cv", number = 5, verboseIter = TRUE)
+
+# Train random forest model with hyperparameter tuning
+rf_model <- train(credit_risk ~ ., data = train_data_balanced, method = "rf", ntree = 50, tuneGrid = tune_grid, trControl = ctrl)
+
+# Make predictions on test set
+predictions <- predict(rf_model, newdata = test_data_balanced)
+
+# Create confusion matrix
+conf_mat <- confusionMatrix(predictions, test_data_balanced$credit_risk)
+conf_mat_df <- as.data.frame.matrix(conf_mat$table)
+conf_mat_df$Reference <- rownames(conf_mat_df)
+
+# Reshape data for plotting
+conf_mat_df <- melt(conf_mat_df, id.vars = "Reference", variable.name = "Prediction", value.name = "Freq")
+
+# Plot confusion matrix
+ggplot(conf_mat_df, aes(x = Prediction, y = Reference, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "steelblue", guide = "colorbar") +
+  geom_text(aes(label = Freq)) +
+  labs(title = "Random Forest Model: Confusion Matrix", x = "Predicted Credit Risk", y = "True Credit Risk", fill = "Frequency")
+```
+This shows that it 
+
+## Make Predictions
+
+Now that we have made a model with the data, we will apply the model to the data to make predictions. 
+```{r}
+# Convert credit_risk to a factor with the same levels as Class in the training data
+merged_data$credit_risk <- factor(merged_data$credit_risk, levels = levels(train_data_balanced$Class))
+
+# Rename credit_risk to Class
+names(merged_data)[names(merged_data) == "credit_risk"] <- "Class"
+
+# Use the rf_model to make predictions on merged_data
+merged_predictions <- predict(rf_model, newdata = merged_data, type = "prob")
+
+```
+
+Now we will visualize how well it predicts high and low risk customers. 
+```{r}
+# Create a data frame with the predicted probabilities
+prob_df <- data.frame(low = merged_predictions[,1], high = merged_predictions[,2])
+
+# Add a column with the observation number
+prob_df$obs <- 1:nrow(prob_df)
+
+# Convert the data frame to long format
+prob_df_long <- tidyr::gather(prob_df, key = "class", value = "probability", -obs)
+
+# Create the stacked bar chart
+ggplot(prob_df_long, aes(x = obs, y = probability, fill = class)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("#F8766D", "#00BFC4")) +
+  labs(x = "Observation", y = "Predicted probability", fill = "Class")
+
+```
+The model predicts high risk customers with good success. 
+
+The following answers Q1 - What are the factors contributing to Credit Risky customer?
+
+```{r}
+# Fit a random forest model to the data
+rf_model <- randomForest(Class ~ ., data = merged_data)
+
+# Create a variable importance plot
+varImpPlot(rf_model)
+
+```
+
+MeanDecreaseGini is a measure of variable importance. It lists the features by impact on the credit risk. Though it doesn't differentiate high and low risk. 
+
+This differentiates the variable importance on high and low risk. 
+```{r}
+varImpPlot_v2 <- function(data) {
+  merged_data <- merge(customer_data, payment_data[, !(colnames(payment_data) %in% "prod_limit")], by = "id")
+  merged_data <- na.omit(merged_data)
+  merged_data <- merged_data[!apply(merged_data, 2, function(x) any(is.infinite(x))),]  # remove infinite values
+  merged_data$credit_risk <- factor(ifelse(merged_data$credit_risk == "low", "low", "high"), levels = c("low", "high"))
+  merged_data <- subset(merged_data, select = -prod_code)
+  
+  # split data into training and testing sets
+  set.seed(123)
+  train_index <- sample(nrow(merged_data), floor(0.7 * nrow(merged_data)))
+  train_data <- merged_data[train_index, ]
+  test_data <- merged_data[-train_index, ]
+  
+  
+  # train the random forest model
+  rf_model <- randomForest(credit_risk ~ ., data = train_data, ntree = 500, mtry = 3, importance = TRUE)
+  
+  # calculate feature importance
+  imp <- importance(rf_model, scale = FALSE)
+  
+  # create data frame with feature importance
+  imp_df <- data.frame(Feature = row.names(imp),
+                       Overall_Importance = imp[, "MeanDecreaseGini"],
+                       stringsAsFactors = FALSE)
+  
+  # order by overall importance
+  imp_df <- imp_df[order(-imp_df$Overall_Importance), ]
+  
+  imp_high <- imp_df[train_data$credit_risk == "high", ]
+  imp_low <- imp_df[train_data$credit_risk == "low", ]
+  imp_high <- imp_high[order(-imp_high$Overall_Importance), ]
+  imp_low <- imp_low[order(-imp_low$Overall_Importance), ]
+  imp_low <- imp_low[!is.na(imp_low$Feature),]
+  imp_high <- imp_high[!is.na(imp_high$Feature),]
+
+  
+
+# set plot size
+options(repr.plot.width=12, repr.plot.height=6)
+
+
+# plot feature importance for high and low credit risk
+par(mfrow = c(1, 2))
+
+# plot feature importance for high credit risk
+barplot(imp_high$Overall_Importance, names.arg = imp_high$Feature, ylab = "Mean Decrease in Accuracy", 
+        main = "Features Impact-High Credit Risk", las = 2, cex.names = 0.7, width = 0.5)
+
+# plot feature importance for low credit risk
+barplot(imp_low$Overall_Importance, names.arg = imp_low$Feature, ylab = "Mean Decrease in Accuracy", 
+        main = "Features Impact-Low Credit Risk", las = 2, cex.names = 0.7, width = 0.5)
+
+}
+
+varImpPlot_v2(credit_data)
+
+```
+
