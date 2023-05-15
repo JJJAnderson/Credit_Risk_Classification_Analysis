@@ -463,6 +463,8 @@ library(dplyr)
 # Create a new column with the quarter and year
 merged_data$quarter <- paste0(year(merged_data$report_date), "_Q", quarter(merged_data$report_date))
 
+# Filter data from 2010 onward
+merged_data <- merged_data[year(merged_data$report_date) >= 2010, ]
 
 # Sort the data frame by report_date in ascending order
 merged_data <- arrange(merged_data, report_date)
