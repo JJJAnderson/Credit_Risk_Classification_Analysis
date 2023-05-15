@@ -40,6 +40,7 @@ library(ROSE)
 library(gridExtra)
 library(DALEX)
 library(randomForestExplainer)
+library(lubridate)
 ```
 
 ## Loading the data
@@ -218,6 +219,8 @@ ggplot(cust_data_subset_melted, aes(Var2, Var1)) +
   geom_text(aes(Var2, Var1, label = round(value,2)), color = "black", size = 3.5) +
   labs(title = "Correlation Heatmap for Selected Features")
 ```
+No strong correlations between the features. 
+
 The average balance for customers with high and low credit risk
 ```{r}
 cust_bal_avg <- aggregate(new_balance ~ id, payment_data, mean)
@@ -239,7 +242,7 @@ ggplot(mean_balances, aes(x = Risk, y = Balance)) +
   theme(plot.title = element_text(hjust = 0.5))
 
 ```
-
+High risk customers have a much higher balance than the low risk customers. 
 
 Calculate the mean for each demographic variable to check for correlation to high or low credit risk. 
 ```{r}
@@ -327,7 +330,7 @@ ggplot(conf_mat_df, aes(x = Prediction, y = Reference, fill = Freq)) +
   geom_text(aes(label = Freq)) +
   labs(title = "Random Forest Model: Confusion Matrix", x = "Predicted Credit Risk", y = "True Credit Risk", fill = "Frequency")
 ```
-This shows that it 
+This shows that the model is working properly. Now we can use it to make predictions. 
 
 ## Make Predictions
 
@@ -436,4 +439,46 @@ barplot(imp_low$Overall_Importance, names.arg = imp_low$Feature, ylab = "Mean De
 varImpPlot_v2(credit_data)
 
 ```
+Understandably, the sum of the overdue days is a factor for high risk. Fea_10 is a major factor, whatever that demographic means is unknown to me. 
 
+Fea_4 is a major factor in Low Credit Risk. 
+
+Why is report_date a bigger High Credit Risk factor than overdue days?
+
+Hypothesis: I wonder if the high credit risk customers are not making their payments, so the low risk customers mostly have more current payment dates. 
+
+```{r}
+#Renaming Class back into credit_risk
+merged_data <- merged_data %>%
+  rename(credit_risk = Class)
+```
+
+Checking the distribution based on the last report_date per customer ID. 
+
+```{r}
+library(ggplot2)
+library(lubridate)
+library(dplyr)
+
+# Create a new column with the quarter and year
+merged_data$quarter <- paste0(year(merged_data$report_date), "_Q", quarter(merged_data$report_date))
+
+
+# Sort the data frame by report_date in ascending order
+merged_data <- arrange(merged_data, report_date)
+
+# Plot the line chart
+ggplot(merged_data, aes(x = quarter, y = stat(count), group = credit_risk, color = credit_risk)) +
+  stat_count(geom = "line") +
+  scale_x_discrete(labels = function(x) gsub("_", "\n", x)) +
+  labs(title = "Credit Risk vs Report Date", x = "Report Date", y = "", color = "Credit Risk") +
+  theme(plot.title = element_text(hjust = 0.5), 
+        legend.position = "top", 
+        axis.text.x = element_text(angle = 90, vjust = 0.5, size = 8), 
+        axis.title.y = element_blank(), 
+        plot.margin = unit(c(30, 10, 50, 10), "pt"))
+
+```
+It looks like there was a large spice in 2015-2016 but levels have come back down. It doesn't look like there is any repetitive pattern. 
+
+It's possible that the sudden spike in low credit risk and increase in high credit risk starting from Q2 2015 could be indicative of changes in the underlying factors affecting credit risk during that time period. This could be due to a variety of factors such as changes in the economy, changes in lending practices, or changes in regulations affecting credit reporting or lending. I would recommend further investigation to determine the root cause of the change in credit risk patterns during that time period. The drop in both high and low credit risk in Q3 2016 could also be indicative of a change in the underlying factors affecting credit risk during that time period. Further analysis would be needed to fully understand the patterns and their implications.
